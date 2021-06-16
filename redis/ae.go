@@ -14,8 +14,8 @@ type FileEvent struct {
 
 type TimeEvent struct {
 	id            int
-	when_sec      int
-	when_ms       int
+	whenSec       int
+	whenMs        int
 	timeProc      TimeProc
 	finalizerProc EventFinalizerProc
 	clientData    interface{}
@@ -70,6 +70,14 @@ func (el *EventLoop) CreateFileEvent(fd int, mask int, proc FileProc, clientData
 }
 
 func (el *EventLoop) DeleteFileEvent(fd int, mask int) {
+	if fd >= el.setSize {
+		return
+	}
+
+	fe := el.events[fd]
+	if fe.mask == NONE {
+		return
+	}
 }
 
 func (el *EventLoop) GetFileEvents() {

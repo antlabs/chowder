@@ -1,5 +1,7 @@
 package redis
 
+import "errors"
+
 type FileProc func(eventLoop *EventLoop, fd int, clientData interface{}, mask int)
 type TimeProc func(eventLoop *EventLoop, id int, clientData interface{})
 type EventFinalizerProc func(eventLoop *EventLoop, clientData interface{})
@@ -36,12 +38,12 @@ type EventLoop struct {
 	fired           []FiredEvent
 	timeEventHead   *TimeEvent
 	stop            bool
-	apidata         string
+	apidata         *apiState
 	beforesleep     BeforeSleepProc
 }
 
 // 初始化函数
-func Create(setSize int) {
+func Create(setSize int) *EventLoop {
 	return &EventLoop{
 		setSize: setSize,
 		maxFd:   -1,
@@ -67,6 +69,8 @@ func (el *EventLoop) CreateFileEvent(fd int, mask int, proc FileProc, clientData
 	}
 
 	fe := &el.events[fd]
+
+	return nil
 }
 
 func (el *EventLoop) DeleteFileEvent(fd int, mask int) {
@@ -112,6 +116,7 @@ func (el *EventLoop) Main() {
 }
 
 func (el *EventLoop) GetApiName() string {
+	return apiName()
 }
 
 func (el *EventLoop) SetBeforeSleepProc() {
@@ -130,8 +135,8 @@ func (el *EventLoop) Resize(setSize int) error {
 		return errors.New("")
 	}
 
-	el.events = append(FileEvent{}, el.events[:setSize])
-	el.fired = append(FiredEvent{}, el.fired[:setSize])
+	el.events = append([]FileEvent{}, el.events[:setSize]...)
+	el.fired = append([]FiredEvent{}, el.fired[:setSize]...)
 
 	return nil
 }

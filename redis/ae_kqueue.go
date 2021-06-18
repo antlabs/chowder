@@ -13,7 +13,7 @@ type apiState struct {
 	events []unix.Kevent_t
 }
 
-func apiCreate(eventLoop *EventLoop) (err error) {
+func (eventLoop *EventLoop) apiCreate() (err error) {
 	var state apiState
 	state.kqfd, err = unix.Kqueue()
 	if err != nil {
@@ -23,18 +23,18 @@ func apiCreate(eventLoop *EventLoop) (err error) {
 	return nil
 }
 
-func apiResize(eventLoop *EventLoop, setSize int) {
+func (eventLoop *EventLoop) apiResize(setSize int) {
 	oldEvents := eventLoop.apidata.events
 	newEvents := make([]unix.Kevent_t, setSize)
 	copy(newEvents, oldEvents)
 	eventLoop.apidata.events = newEvents
 }
 
-func apiFree(eventLoop *EventLoop) {
+func (eventLoop *EventLoop) apiFree() {
 	unix.Close(eventLoop.apidata.kqfd)
 }
 
-func apiAddEvent(eventLoop *EventLoop, fd int, mask int) (err error) {
+func (eventLoop *EventLoop) apiAddEvent(fd int, mask int) (err error) {
 	state := eventLoop.apidata
 	ke := make([]unix.Kevent_t, 0, 2)
 
@@ -55,7 +55,7 @@ func apiAddEvent(eventLoop *EventLoop, fd int, mask int) (err error) {
 	return nil
 }
 
-func apiDelEvent(eventLoop *EventLoop, fd int, mask int) (err error) {
+func (eventLoop *EventLoop) apiDelEvent(fd int, mask int) (err error) {
 
 	state := eventLoop.apidata
 	ke := make([]unix.Kevent_t, 0, 2)
@@ -78,7 +78,7 @@ func apiDelEvent(eventLoop *EventLoop, fd int, mask int) (err error) {
 	return nil
 }
 
-func apiPoll(eventLoop *EventLoop, tv time.Duration) int {
+func (eventLoop *EventLoop) apiPoll(tv time.Duration) int {
 	state := eventLoop.apidata
 
 	retVal := 0

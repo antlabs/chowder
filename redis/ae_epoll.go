@@ -13,7 +13,7 @@ type apiState struct {
 	events []unix.EpollEvent
 }
 
-func apiCreate(eventLoop *EventLoop) (err error) {
+func (eventLoop *EventLoop) apiCreate() (err error) {
 	var state apiState
 
 	state.epfd, err = unix.EpollCreate1(0)
@@ -25,7 +25,7 @@ func apiCreate(eventLoop *EventLoop) (err error) {
 	return nil
 }
 
-func apiResize(eventLoop *EventLoop, setSize int) {
+func (eventLoop *EventLoop) apiResize(setSize int) {
 
 	oldEvents := eventLoop.apidata.events
 	newEvents := make([]eventLoop, setSize)
@@ -33,11 +33,11 @@ func apiResize(eventLoop *EventLoop, setSize int) {
 	eventLoop.apidata.events = newEvents
 }
 
-func apiFree(eventLoop *EventLoop) {
+func (eventLoop *EventLoop) apiFree() {
 	unix.Close(eventLoop.apidata.epfd)
 }
 
-func apiAddEvent(eventLoop *EventLoop, fd int, mask int) error {
+func (eventLoop *EventLoop) apiAddEvent(fd int, mask int) error {
 	state := eventLoop.apidata
 	var ee unix.EpollEvent
 	op := unix.EPOLL_CTL_MOD
@@ -59,7 +59,7 @@ func apiAddEvent(eventLoop *EventLoop, fd int, mask int) error {
 	return unix.EpollCtl(state.epfd, op, fd, &ee)
 }
 
-func apiDelEvent(eventLoop *EventLoop, fd int, delmask int) (err error) {
+func (eventLoop *EventLoop) apiDelEvent(fd int, delmask int) (err error) {
 	state := eventLoop.apidata
 	var ee unix.EpollEvent
 
@@ -82,7 +82,7 @@ func apiDelEvent(eventLoop *EventLoop, fd int, delmask int) (err error) {
 	return err
 }
 
-func apiPoll(eventLoop *EventLoop, tv time.Duration) int {
+func (eventLoop *EventLoop) apiPoll(tv time.Duration) int {
 	state := eventLoop.apidata
 
 	msec := -1

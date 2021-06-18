@@ -1,3 +1,5 @@
+// +build linux
+
 package redis
 
 import (
@@ -85,7 +87,7 @@ func apiPoll(eventLoop *EventLoop, tv time.Duration) int {
 
 	msec := -1
 	if tv > 0 {
-		msec = tv/time.Second*1000 + (tv%time.Second)/time.Millisecond
+		msec = tv / time.Millisecond
 	}
 
 	retVal, _ := unix.EpollWait(state.epfd, state.events, msec)

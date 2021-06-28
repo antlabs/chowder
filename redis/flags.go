@@ -1,10 +1,10 @@
 package redis
 
-type Option int8
+import "errors"
 
-const (
-	OK  Option = 0
-	ERR        = -1
+var (
+	OK  = errors.New("OK")
+	ERR = errors.New("ERR")
 )
 
 type Action int8
@@ -18,10 +18,12 @@ const (
 type Event int8
 
 const (
-	FILE_EVENTS Event = 1
-	TIME_EVENTS       = 2
-	ALL_EVENTS        = (FILE_EVENTS | TIME_EVENTS)
-	DONT_WAIT         = 4
+	FILE_EVENTS Event = 1 << iota
+	TIME_EVENTS
+	DONT_WAIT
+	CALL_BEFORE_SLEEP
+	CALL_AFTER_SLEEP
+	ALL_EVENTS = (FILE_EVENTS | TIME_EVENTS)
 )
 
 const NOMORE = -1

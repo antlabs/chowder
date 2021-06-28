@@ -1,7 +1,9 @@
 package redis
 
 import (
+	"container/list"
 	"errors"
+	"fmt"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -19,16 +21,6 @@ type FileEvent struct {
 	clientData interface{}
 }
 
-type TimeEvent struct {
-	id            int
-	when_sec      int
-	when_ms       int
-	timeProc      TimeProc
-	finalizerProc EventFinalizerProc
-	clientData    interface{}
-	next          *TimeEvent
-}
-
 type FiredEvent struct {
 	fd   int
 	mask int
@@ -41,11 +33,12 @@ type EventLoop struct {
 	lastTime        int
 	events          []FileEvent
 	fired           []FiredEvent
-	timeEventHead   *TimeEvent
+	timeEventHead   *list.List //TimeEvent
 	stop            bool
 	apidata         string
 	beforeSleep     BeforeSleepProc
 	afterSleep      BeforeSleepProc
+	flags           Event
 }
 
 // 初始化函数
@@ -58,9 +51,43 @@ func Create(setSize int) {
 	}
 }
 
+func (el *EventLoop) GetSetSize() bool {
+	return el.setSize
+}
+
+func (el *EventLoop) SetDontWait(noWait bool) {
+	if noWait {
+		el.Flags |= DONT_WAIT
+		return
+	}
+	el.Flags &= ^DONT_WAIT
+}
+
+func (el *EventLoop) Resize(setSize int) error {
+	if setSize == el.setSize {
+		return nil
+	}
+
+	if el.maxFd >= setSize {
+		return errors.New("TODO 定义下错误消息")
+	}
+
+	el.apiResize(setSize)
+
+	el.events = append(FileEvent{}, el.events[:setSize])
+	el.fired = append(FiredEvent{}, el.fired[:setSize])
+	el.setSize = setSize
+
+	for i := el.maxFd + 1; i < setSize; i++ {
+		el.events[i].mask = NONE
+	}
+	return nil
+}
+
 func (el *EventLoop) Delete() {
 	el.events = nil
 	el.fired = nil
+	//TODO 定时器链表直接给个空
 
 }
 
@@ -141,20 +168,60 @@ func GetTime() time.Time {
 	return time.Now()
 }
 
-func (el *EventLoop) FileProc(fd int, clientData interface{}, mask int) {
+func (el *EventLoop) CreateTimeEvent(milliseconds time.Durtion, proc TimeProc, clientData interface{}, finalizerProc EventFinalizerProc) {
+	id := el.timeEventNextId
+	el.timeEventNextId++
+
+	addTimeEvent(el.timeEventHead, id, milliseconds, proc, clientData, finalizerProc)
 }
 
-func (el *EventLoop) TimeProc(id int, clientData interface{}) {
+func (el *EventLoop) DeleteTimeEvent(id int) error {
+	for e := el.timeEventHead.Front(); e != nil; e = e.Next() {
+
+		te := e.Value.(*TimeEvent)
+
+		if te.id == id {
+			te.id = DELETED_EVENT_ID
+			return nil
+		}
+	}
+
+	return ERR
+
 }
 
-func (el *EventLoop) EventFinalizerProc(clientData interface{}) {
+func (el *EventLoop) usUntilEarliestTimer() (rv time.Duration, exists bool) {
+	if el.timeEventHead == nil {
+		return time.Durtion(0), false
+	}
+
+	var earliest *TimeEvent
+	for e := el.timeEventHead.Front(); e != nil; e = e.Next() {
+		et := e.Value.(TimeEvent)
+		if earliest == nil || earliest.when < et.when {
+			earliest = et
+		}
+	}
+
+	now := time.Now()
+	if now > earliest.when {
+		return time.Durtion(0), false
+	}
+
+	return now.Sub(earliest.when), true
 }
 
-func (el *EventLoop) CreateTimeEvent(milliseconds int, proc TimeProc, clientData interface{}, finalizerProc EventFinalizerProc) {
-}
+func (el *EventLoop) ProcessTimeEvents() {
+	for e := el.timeEventHead.Front(); e != nil; {
+		next := e.Next()
+		te := e.Value.(*TimeEvent)
 
-func (el *EventLoop) DeleteTimeEvent(id int) {
+		if te.id == DELETED_EVENT_ID {
+			continue
+		}
 
+		e = next
+	}
 }
 
 func (el *EventLoop) ProcessEvents(flags EVENT) {
@@ -222,23 +289,4 @@ func (el *EventLoop) SetBeforeSleepProc(beforeSleep BeforeSleepProc) {
 
 func (el *EventLoop) SetBeforeSleepProc(beforeSleep BeforeSleepProc) {
 	el.beforeSleep = beforesleep
-}
-
-func (el *EventLoop) GetSize() int {
-	return el.setSize
-}
-
-func (el *EventLoop) Resize(setSize int) error {
-	if setSize == el.setSize {
-		return nil
-	}
-
-	if el.maxFd >= setSize {
-		return errors.New("")
-	}
-
-	el.events = append(FileEvent{}, el.events[:setSize])
-	el.fired = append(FiredEvent{}, el.fired[:setSize])
-
-	return nil
 }

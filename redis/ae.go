@@ -3,14 +3,14 @@ package redis
 import (
 	"container/list"
 	"errors"
-	"fmt"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
 type FileProc func(eventLoop *EventLoop, fd int, clientData interface{}, mask int)
-type TimeProc func(eventLoop *EventLoop, id int, clientData interface{})
+type TimeProc func(eventLoop *EventLoop, id int, clientData interface{}) (time.Time, IDType)
 type EventFinalizerProc func(eventLoop *EventLoop, clientData interface{})
 type BeforeSleepProc func(eventLoop *EventLoop)
 
@@ -35,14 +35,14 @@ type EventLoop struct {
 	fired           []FiredEvent
 	timeEventHead   *list.List //TimeEvent
 	stop            bool
-	apidata         string
+	apidata         *apiState
 	beforeSleep     BeforeSleepProc
 	afterSleep      BeforeSleepProc
 	flags           Event
 }
 
 // 初始化函数
-func Create(setSize int) {
+func Create(setSize int) *EventLoop {
 	return &EventLoop{
 		setSize: setSize,
 		maxFd:   -1,
@@ -51,16 +51,16 @@ func Create(setSize int) {
 	}
 }
 
-func (el *EventLoop) GetSetSize() bool {
+func (el *EventLoop) GetSetSize() int {
 	return el.setSize
 }
 
 func (el *EventLoop) SetDontWait(noWait bool) {
 	if noWait {
-		el.Flags |= DONT_WAIT
+		el.flags |= DONT_WAIT
 		return
 	}
-	el.Flags &= ^DONT_WAIT
+	el.flags &= ^DONT_WAIT
 }
 
 func (el *EventLoop) Resize(setSize int) error {
@@ -74,8 +74,8 @@ func (el *EventLoop) Resize(setSize int) error {
 
 	el.apiResize(setSize)
 
-	el.events = append(FileEvent{}, el.events[:setSize])
-	el.fired = append(FiredEvent{}, el.fired[:setSize])
+	el.events = append([]FileEvent{}, el.events[:setSize]...)
+	el.fired = append([]FiredEvent{}, el.fired[:setSize]...)
 	el.setSize = setSize
 
 	for i := el.maxFd + 1; i < setSize; i++ {
@@ -96,7 +96,7 @@ func (el *EventLoop) Stop() {
 
 }
 
-func (el *EventLoop) CreateFileEvent(fd int, mask int, proc FileProc, clientData interface{}) error {
+func (el *EventLoop) CreateFileEvent(fd int, mask Action, proc FileProc, clientData interface{}) error {
 	if fd >= el.setSize {
 		return errors.New("create file event fail")
 	}
@@ -126,7 +126,7 @@ func (el *EventLoop) CreateFileEvent(fd int, mask int, proc FileProc, clientData
 	return nil
 }
 
-func (el *EventLoop) DeleteFileEvent(fd int, mask int) {
+func (el *EventLoop) DeleteFileEvent(fd int, mask Action) {
 	if fd >= el.setSize {
 		return
 	}
@@ -155,7 +155,7 @@ func (el *EventLoop) DeleteFileEvent(fd int, mask int) {
 	return
 }
 
-func (el *EventLoop) GetFileEvents() int {
+func (el *EventLoop) GetFileEvents(fd int) Action {
 	if fd >= el.setSize {
 		return 0
 	}
@@ -168,7 +168,7 @@ func GetTime() time.Time {
 	return time.Now()
 }
 
-func (el *EventLoop) CreateTimeEvent(milliseconds time.Durtion, proc TimeProc, clientData interface{}, finalizerProc EventFinalizerProc) {
+func (el *EventLoop) CreateTimeEvent(milliseconds time.Duration, proc TimeProc, clientData interface{}, finalizerProc EventFinalizerProc) {
 	id := el.timeEventNextId
 	el.timeEventNextId++
 
@@ -192,55 +192,150 @@ func (el *EventLoop) DeleteTimeEvent(id int) error {
 
 func (el *EventLoop) usUntilEarliestTimer() (rv time.Duration, exists bool) {
 	if el.timeEventHead == nil {
-		return time.Durtion(0), false
+		return time.Duration(0), false
 	}
 
 	var earliest *TimeEvent
 	for e := el.timeEventHead.Front(); e != nil; e = e.Next() {
-		et := e.Value.(TimeEvent)
-		if earliest == nil || earliest.when < et.when {
+		et := e.Value.(*TimeEvent)
+		if earliest == nil || earliest.when.Before(et.when) {
 			earliest = et
 		}
 	}
 
 	now := time.Now()
-	if now > earliest.when {
-		return time.Durtion(0), false
+	if now.Before(earliest.when) {
+		return time.Duration(0), false
 	}
 
 	return now.Sub(earliest.when), true
 }
 
-func (el *EventLoop) ProcessTimeEvents() {
+func (el *EventLoop) ProcessTimeEvents() int {
+	now := time.Now()
+	processed := 0
+
 	for e := el.timeEventHead.Front(); e != nil; {
 		next := e.Next()
 		te := e.Value.(*TimeEvent)
 
 		if te.id == DELETED_EVENT_ID {
-			continue
+			if te.refcount > 0 {
+				goto next
+			}
+
+			el.timeEventHead.Remove(e)
+			goto next
 		}
 
+		if te.id > el.maxFd {
+			goto next
+		}
+
+		// te.when <= now
+		if te.when.Before(now) || te.when.Equal(now) {
+			id := te.id
+			to, retVal := te.timeProc(el, id, te.clientData)
+			te.refcount--
+			processed++
+			now = time.Now()
+			if retVal != NOMORE {
+				te.when = to
+			} else {
+				te.id = DELETED_EVENT_ID
+			}
+		}
+
+	next:
 		e = next
 	}
+
+	return processed
 }
 
-func (el *EventLoop) ProcessEvents(flags EVENT) {
-	processed, numevents := 0, 0
+func (el *EventLoop) ProcessEvents(flags Event) int {
+	processed := 0
 
 	if !(flags&TIME_EVENTS > 0) || !(flags&FILE_EVENTS > 0) {
-		return
+		return 0
 	}
+
+	var tv time.Duration
 
 	if el.maxFd != -1 || flags&TIME_EVENTS > 0 && flags&DONT_WAIT == 0 {
+
+		if flags&TIME_EVENTS > 0 && flags&DONT_WAIT == 0 {
+			tv, _ = el.usUntilEarliestTimer()
+		}
+
+		if tv < 0 {
+			if flags&DONT_WAIT > 0 {
+				tv = time.Duration(0)
+			}
+		}
+
+		if el.flags&DONT_WAIT > 0 {
+			tv = time.Duration(0)
+		}
+
+		if el.beforeSleep != nil && flags&CALL_BEFORE_SLEEP > 0 {
+			el.beforeSleep(el)
+		}
+
+		numevents := el.apiPoll(tv)
+
+		if el.afterSleep != nil && flags&CALL_AFTER_SLEEP > 0 {
+			el.afterSleep(el)
+		}
+
+		for j := 0; j < numevents; j++ {
+			fe := el.events[el.fired[j].fd]
+			mask := el.fired[j].mask
+			fd := el.fired[j].fd
+			fired := 0
+
+			//TOOD 未知
+			invert := fe.mask&BARRIER > 0
+
+			//TODO判断
+			if !invert && fe.mask&READABLE > 0 && mask&READABLE > 0 {
+				fe.rfileProc(el, fd, fe.clientData, mask)
+				fired++
+				fe = el.events[fd]
+			}
+
+			if fe.mask&WRITABLE > 0 && mask&WRITABLE > 0 {
+				if fired == 0 || *(*uintptr)(unsafe.Pointer(&fe.wfileProc)) != *(*uintptr)(unsafe.Pointer(&fe.rfileProc)) {
+					fe.wfileProc(el, fd, fe.clientData, mask)
+					fired++
+				}
+			}
+
+			if invert {
+				fe = el.events[fd]
+				if (fe.mask&READABLE > 0 && mask&READABLE > 0) &&
+					(fired == 0 || *(*uintptr)(unsafe.Pointer(&fe.wfileProc)) != *(*uintptr)(unsafe.Pointer(&fe.rfileProc))) {
+
+					fe.wfileProc(el, fd, fe.clientData, mask)
+					fired++
+				}
+			}
+			processed++
+		}
 	}
+
+	if flags&TIME_EVENTS > 0 {
+		processed += el.ProcessTimeEvents()
+	}
+
+	return processed
 }
 
-func Wait(fd int, mask int, milliseconds int) {
+func Wait(fd int, mask int, milliseconds int) (Action, error) {
 	pfd := make([]unix.PollFd, 1)
 	pfd[0].Fd = int32(fd)
 
-	reMask := 0
-	retVal := 0
+	reMask := Action(0)
 	if mask&READABLE > 0 {
 		reMask |= unix.POLLIN
 	}
@@ -249,7 +344,7 @@ func Wait(fd int, mask int, milliseconds int) {
 		reMask |= unix.POLLOUT
 	}
 
-	retVal, _ := unix.Poll(pfd, milliseconds)
+	retVal, err := unix.Poll(pfd, milliseconds)
 	if retVal == 1 {
 		if pfd[0].Revents&unix.POLLIN > 0 {
 			reMask |= READABLE
@@ -264,18 +359,18 @@ func Wait(fd int, mask int, milliseconds int) {
 			reMask |= WRITABLE
 		}
 
-		return reMask
+		return reMask, nil
 	}
 
-	return retVal
+	return 0, err
 }
 
 func (el *EventLoop) Main() {
-	for !el.Stop {
+	for !el.stop {
 		if el.beforeSleep != nil {
 			el.beforeSleep(el)
 		}
-		el.ProcessEvents(ALL_EVENTS)
+		el.ProcessEvents(ALL_EVENTS | CALL_BEFORE_SLEEP | CALL_AFTER_SLEEP)
 	}
 }
 
@@ -284,9 +379,9 @@ func (el *EventLoop) GetApiName() string {
 }
 
 func (el *EventLoop) SetBeforeSleepProc(beforeSleep BeforeSleepProc) {
-	el.beforeSleep = beforesleep
+	el.beforeSleep = beforeSleep
 }
 
-func (el *EventLoop) SetBeforeSleepProc(beforeSleep BeforeSleepProc) {
-	el.beforeSleep = beforesleep
+func (el *EventLoop) SetAfterSleepProc(afterSleep BeforeSleepProc) {
+	el.afterSleep = afterSleep
 }

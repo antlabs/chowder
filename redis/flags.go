@@ -13,6 +13,7 @@ const (
 	NONE     Action = 0
 	READABLE        = 1
 	WRITABLE        = 2
+	BARRIER         = 4
 )
 
 type Event int8
@@ -26,5 +27,9 @@ const (
 	ALL_EVENTS = (FILE_EVENTS | TIME_EVENTS)
 )
 
-const NOMORE = -1
-const DELETED_EVENT_ID = -1
+type IDType int8
+
+const (
+	NOMORE           = -1
+	DELETED_EVENT_ID = -1
+)

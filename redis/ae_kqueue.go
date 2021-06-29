@@ -34,7 +34,7 @@ func (eventLoop *EventLoop) apiFree() {
 	unix.Close(eventLoop.apidata.kqfd)
 }
 
-func (eventLoop *EventLoop) apiAddEvent(fd int, mask int) (err error) {
+func (eventLoop *EventLoop) apiAddEvent(fd int, mask Action) (err error) {
 	state := eventLoop.apidata
 	ke := make([]unix.Kevent_t, 0, 2)
 
@@ -55,7 +55,7 @@ func (eventLoop *EventLoop) apiAddEvent(fd int, mask int) (err error) {
 	return nil
 }
 
-func (eventLoop *EventLoop) apiDelEvent(fd int, mask int) (err error) {
+func (eventLoop *EventLoop) apiDelEvent(fd int, mask Action) (err error) {
 
 	state := eventLoop.apidata
 	ke := make([]unix.Kevent_t, 0, 2)
@@ -84,7 +84,7 @@ func (eventLoop *EventLoop) apiPoll(tv time.Duration) int {
 	retVal := 0
 	numEvnets := 0
 
-	if tv > 0 {
+	if tv >= 0 {
 		var timeout unix.Timespec
 		timeout.Sec = int64(tv / time.Second)
 		timeout.Nsec = int64(tv % time.Second)

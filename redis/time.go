@@ -11,7 +11,7 @@ type TimeEvent struct {
 	timeProc      TimeProc
 	finalizerProc EventFinalizerProc
 	clientData    interface{}
-	rcfcount      int
+	refcount      int
 }
 
 func createTimeEvent() *list.List {
